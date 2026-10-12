@@ -3305,6 +3305,7 @@ test("unrelated ChatGPT alerts are not terminal", async () => {
 
 function toolConfirmationPage(options: {
   disappearAfterReads?: number;
+  connectorName?: string;
   surface?: "dialog" | "card" | "current";
   allowLabel?: "Allow once" | "Allow" | "Always allow" | "允许一次" | "允许一次 ↵" | "允許一次" | "始终允许";
   denyLabel?: "Deny" | "拒绝" | "拒绝 Esc" | "拒絕";
@@ -3343,6 +3344,9 @@ function toolConfirmationPage(options: {
       return visible;
     },
     getByRole: (_role: string, input: { name: string | RegExp }) => button(input.name),
+    getByText: (pattern: RegExp) => ({
+      count: async () => pattern.test(`Allow ChatGPT to use ${options.connectorName ?? "Codex Native"}?`) ? 1 : 0,
+    }),
     waitFor: async ({ state }: { state: string }) => {
       expect(state).toBe("hidden");
       expect(visible).toBeFalse();
@@ -3363,11 +3367,9 @@ function toolConfirmationPage(options: {
       getByText: (text: RegExp) => {
         expect(text).toBeInstanceOf(RegExp);
         expect(text.test("Allow ChatGPT to use Codex Native?")).toBeTrue();
-        expect(text.test("允许 ChatGPT 使用 Codex Native 吗？")).toBeTrue();
-        expect(text.test("允许 ChatGPT 使用 Codex Native吗？")).toBeTrue();
-        expect(text.test("允許 ChatGPT 使用 Codex Native 嗎？")).toBeTrue();
-        expect(text.test("Allow ChatGPT to use Codex Native2?")).toBeFalse();
-        expect(text.test("允许 ChatGPT 使用 Codex Native2 吗？")).toBeFalse();
+        expect(text.test("允许 ChatGPT 使用 NexusDock?")).toBeTrue();
+        expect(text.test("允許 ChatGPT 使用 Codex Native2？")).toBeTrue();
+        expect(text.test("Allow ChatGPT to run an unknown command")).toBeFalse();
         return {};
       },
       locator: (selector: string) => selector.includes(surfaceSelector)
@@ -3426,6 +3428,23 @@ test("auto-approval never selects Chinese permanent grant controls", async () =>
   await expect(resolveChatGptToolConfirmation(fixture.page, "Codex Native", true))
     .rejects.toThrow("Approval button not found");
   expect(fixture.pressed).toEqual([]);
+});
+
+test("an unrelated connector is announced for manual approval but is never auto-granted", async () => {
+  const fixture = toolConfirmationPage({ connectorName: "NexusDock", disappearAfterReads: 2 });
+  const pending: boolean[] = [];
+  expect(await resolveChatGptToolConfirmation(fixture.page, "Codex Native", true, undefined, 1_000,
+    undefined, async value => { pending.push(value); return value ? 45_000 : undefined; })).toBeTrue();
+  expect(pending).toEqual([true, false]);
+  expect(fixture.pressed).toEqual([]);
+});
+
+test("invalid per-request timeout from the launcher fails back to the bounded caller timeout", async () => {
+  const fixture = toolConfirmationPage({ connectorName: "NexusDock" });
+  await expect(resolveChatGptToolConfirmation(fixture.page, "Codex Native", true, undefined, 2,
+    undefined, async pending => pending ? 999_999 : undefined))
+    .rejects.toMatchObject({ code: "chatgpt_tool_approval_timeout" });
+  expect(fixture.pressed).toEqual(["Deny:click"]);
 });
 
 test("cancelling while an approval is pending clears the notice without choosing a button", async () => {
