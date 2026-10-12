@@ -58,6 +58,7 @@ test("approval notices require the running tab's helper and never change another
   const other = { ...tab, id: "other-tab", traceId: "another-turn", helperPid: process.pid + 1 };
   const events = [];
   let mode = "automatic";
+  let alerts = 0;
   const host = Object.assign(Object.create(BrowserHost.prototype), {
     turnTabs: new Map([[tab.id, tab], [other.id, other]]), closedTurnOwners: new Map(),
     selectedTabId: other.id, getBrowserInteractionMode: () => mode,
@@ -65,7 +66,9 @@ test("approval notices require the running tab's helper and never change another
     publishState: state => events.push(state),
   });
   const server = await new BrowserControlServer({
-    logger: { info() {}, warn() {}, error() {} }, getBrowserHost: () => host, getPreferences: () => ({}),
+    logger: { info() {}, warn() {}, error() {} }, getBrowserHost: () => host,
+    getPreferences: () => ({ approvalTimeoutSeconds: 45 }),
+    onApprovalNeeded: () => { alerts++; },
   }).start();
   const { endpoint, token } = server.descriptor();
   const send = (body, auth = token) => fetch(`${endpoint}/v1/turn/approval`, {
@@ -79,7 +82,12 @@ test("approval notices require the running tab's helper and never change another
     assert.equal((await send({ ...owner, pending: "true" })).status, 400);
     assert.equal((await send(owner)).status, 400);
     assert.equal(events.length, 0);
+    const firstResponse = await send({ ...owner, pending: true });
+    assert.equal(firstResponse.status, 200);
+    assert.equal((await firstResponse.json()).approvalTimeoutMs, 45_000);
+    assert.equal(alerts, 1);
     assert.equal((await send({ ...owner, pending: true })).status, 200);
+    assert.equal(alerts, 1, "a duplicate status update must not replay the alert");
     assert.equal(tab.approvalPending, true);
     assert.equal(other.approvalPending, undefined);
     assert.equal(host.selectedTabId, other.id, "a notice must not switch away from the user's selected task");
@@ -87,7 +95,11 @@ test("approval notices require the running tab's helper and never change another
     host.heartbeatTurn(tab.traceId, tab.helperPid);
     assert.equal(tab.approvalPending, true, "normal heartbeats must not erase the notice");
     assert.equal((await send({ ...owner, pending: false })).status, 200);
+    assert.equal(alerts, 1);
     assert.equal(events.at(-1).tabs[0].approvalPending, undefined);
+    assert.equal((await send({ ...owner, pending: true })).status, 200);
+    assert.equal(alerts, 2, "a new approval must alert again");
+    assert.equal((await send({ ...owner, pending: false })).status, 200);
     tab.status = "error";
     assert.equal((await send({ ...owner, pending: true })).status, 400);
     tab.approvalPending = true;
