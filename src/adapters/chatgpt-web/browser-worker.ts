@@ -980,7 +980,7 @@ export async function resolveChatGptToolConfirmation(
   const selectedTitle = new RegExp(
     `^(?:Allow ChatGPT to use ${escapedName}\\?|允许 ChatGPT 使用 ${escapedName}\\s*(?:吗)?[？?]|允許 ChatGPT 使用 ${escapedName}\\s*(?:嗎)?[？?])$`,
   );
-  const anyConnectorTitle = /^(?:Allow ChatGPT to use [^\\n?？]{1,80}\\?|允许 ChatGPT 使用 [^\\n?？]{1,80}[？?]|允許 ChatGPT 使用 [^\\n?？]{1,80}[？?])$/;
+  const anyConnectorTitle = /^(?:Allow ChatGPT to use [^\n?？]{1,80}\?|允许 ChatGPT 使用 [^\n?？]{1,80}[？?]|允許 ChatGPT 使用 [^\n?？]{1,80}[？?])$/;
   const dialogs = page.locator('[role="dialog"], [data-testid="tool-approval-card"], [data-codex-approval-surface="true"]')
     .filter({ has: page.getByText(anyConnectorTitle) })
     .filter({ visible: true });
