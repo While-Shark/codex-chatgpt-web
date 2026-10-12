@@ -17,6 +17,14 @@ function card(app = "Codex Native2", actions = "Allow once", attribute = 'data-c
     <button aria-label="Approval options">Options</button></div></div></section>`;
 }
 
+// Mirrors the visible Simplified Chinese approval card, including keyboard shortcut badges
+// and the separate split-button menu. Those badges can enter the accessible button name.
+function chineseCard(app = "Codex Native2", action = "允许一次") {
+  return `<section data-codex-approval-surface="true"><div role="alert"><p>允许 ChatGPT 使用 ${app}?</p>
+    <button onclick="this.closest('section').remove()">拒绝 <kbd>Esc</kbd></button>
+    <div><button onclick="document.body.dataset.chosen='one-time';this.closest('section').remove()">${action} <kbd>↵</kbd></button>
+    <button aria-label="更多授权选项">⌄</button></div></div></section>`;
+}
 domTest("current and earlier approval surfaces select only the visible one-time action", async () => {
   await withPage(async page => {
     for (const attribute of ['data-codex-approval-surface="true"', 'role="dialog"', 'data-testid="tool-approval-card"']) {
@@ -60,6 +68,49 @@ domTest("a pending current approval stays manual and respects cancellation", asy
   });
 }, 20_000);
 
+domTest("Chinese screenshot-style split approval auto-clicks only the one-time action when enabled", async () => {
+  await withPage(async page => {
+    await page.setContent(chineseCard());
+    expect(await resolveChatGptToolConfirmation(page, "Codex Native2", true)).toBeTrue();
+    expect(await page.locator("body").getAttribute("data-chosen")).toBe("one-time");
+    expect(await page.locator("section").count()).toBe(0);
+  });
+}, 20_000);
+
+domTest("Chinese screenshot-style approval stays manual when auto-approve is disabled", async () => {
+  await withPage(async page => {
+    await page.setContent(chineseCard());
+    const controller = new AbortController();
+    const pending: boolean[] = [];
+    await expect(resolveChatGptToolConfirmation(page, "Codex Native2", false, controller.signal, 1_000,
+      undefined, async value => { pending.push(value); if (value) controller.abort(); }))
+      .rejects.toMatchObject({ name: "AbortError" });
+    expect(pending).toEqual([true, false]);
+    expect(await page.locator("section").count()).toBe(1);
+    expect(await page.locator("body").getAttribute("data-chosen")).toBeNull();
+  });
+}, 20_000);
+
+domTest("Chinese shortcut hint Deny is clicked after manual approval expires", async () => {
+  await withPage(async page => {
+    await page.setContent(chineseCard());
+    await expect(resolveChatGptToolConfirmation(page, "Codex Native2", false, undefined, 30))
+      .rejects.toMatchObject({ code: "chatgpt_tool_approval_timeout" });
+    expect(await page.locator("section").count()).toBe(0);
+    expect(await page.locator("body").getAttribute("data-chosen")).toBeNull();
+  });
+}, 20_000);
+
+domTest("Chinese one-time approval does not select permanent or foreign connector actions", async () => {
+  await withPage(async page => {
+    await page.setContent(chineseCard("GitHub"));
+    expect(await resolveChatGptToolConfirmation(page, "Codex Native2", true)).toBeFalse();
+    expect(await page.locator("body").getAttribute("data-chosen")).toBeNull();
+    await page.setContent(chineseCard().replace("更多授权选项", "始终允许"));
+    expect(await resolveChatGptToolConfirmation(page, "Codex Native2", true)).toBeTrue();
+    expect(await page.locator("body").getAttribute("data-chosen")).toBe("one-time");
+  });
+}, 20_000);
 domTest("localized approval stays manual and accepts a human decision", async () => {
   await withPage(async page => {
     await page.setContent(card().replace("Allow ChatGPT to use Codex Native2?", "允许 ChatGPT 使用 Codex Native2 吗？")
