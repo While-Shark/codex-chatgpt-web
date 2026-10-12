@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld("codexWebLauncher", {
   setFreshConversationPerTurn: (enabled) => ipcRenderer.invoke("launcher:fresh-conversation-per-turn", enabled),
   setUseSavedChats: (enabled) => ipcRenderer.invoke("launcher:use-saved-chats", enabled),
   setAutoApproveToolCalls: (enabled) => ipcRenderer.invoke("launcher:auto-approve-tool-calls", enabled),
+  setApprovalTimeoutSeconds: (seconds) => ipcRenderer.invoke("launcher:approval-timeout-seconds", seconds),
   setZeroRiskPro: (enabled) => ipcRenderer.invoke("launcher:zero-risk-pro", enabled),
   setBrowserInteractionMode: (mode) => ipcRenderer.invoke("launcher:browser-interaction-mode", mode),
   setPreference: (key, value) => ipcRenderer.invoke("launcher:set-preference", key, value),
