@@ -1288,6 +1288,16 @@ export function remainingStageBudgetMs(
 
 export const CHATGPT_BROWSER_OBSERVATION_PROBE_TIMEOUT_MS = 5_000;
 export const MAX_CHATGPT_BROWSER_PAGE_REBINDS = 2;
+// A late user bubble can mount before its assistant node during ChatGPT Activity renders.
+// Only wait for identity evidence; never accept an unrelated turn or replay a tool call.
+export const CHATGPT_ASSISTANT_REBIND_GRACE_MS = 1_500;
+const CHATGPT_ASSISTANT_REBIND_RECHECK_MS = 175;
+
+class ChatGptAssistantRebindPendingError extends Error {
+  constructor() {
+    super("ChatGPT opened another user turn while the bound assistant response was detached");
+  }
+}
 
 export class ChatGptBrowserObservationTimeoutError extends Error {
   constructor(timeoutMs: number) {
@@ -3289,6 +3299,36 @@ export class ChatGptBrowserWorker {
     binding: ChatGptAssistantTurnBinding,
     signal?: AbortSignal,
   ): Promise<ChatGptAssistantTurnBinding> {
+    const deadline = Date.now() + CHATGPT_ASSISTANT_REBIND_GRACE_MS;
+    let rechecks = 0;
+    for (;;) {
+      try {
+        const rebound = await this.reconcileAssistantTurnBindingOnce(page, baseline, binding, signal);
+        if (rechecks > 0) {
+          console.warn(`[chatgpt-web] assistant binding recovered after ${rechecks} DOM rechecks`);
+        }
+        return rebound;
+      } catch (error) {
+        if (!(error instanceof ChatGptAssistantRebindPendingError)) throw error;
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) {
+          console.warn("[chatgpt-web] assistant binding still ambiguous after bounded DOM rechecks");
+          throw error;
+        }
+        rechecks += 1;
+        await withBrowserTurnAbort(new Promise<void>(resolve => {
+          setTimeout(resolve, Math.min(CHATGPT_ASSISTANT_REBIND_RECHECK_MS, remainingMs));
+        }), signal);
+      }
+    }
+  }
+
+  private async reconcileAssistantTurnBindingOnce(
+    page: Page,
+    baseline: ChatGptSubmissionBaseline,
+    binding: ChatGptAssistantTurnBinding,
+    signal?: AbortSignal,
+  ): Promise<ChatGptAssistantTurnBinding> {
     const boundCount = await withChatGptBrowserObservationTimeout(
       withBrowserTurnAbort(binding.locator.count(), signal),
     );
@@ -3336,7 +3376,16 @@ export class ChatGptBrowserWorker {
         // Activity can replace its temporary group while still generating; requiring
         // a completed answer here mistakes that same unfinished turn for a foreign one.
       }
-      if (!matches) throw new Error("ChatGPT opened another user turn while the bound assistant response was detached");
+      if (!matches) {
+        // An accepted user bubble can render before its corresponding assistant
+        // group. Reobserve briefly, but only while the old group is gone and
+        // there is exactly one new user. Foreign/competing turns still fail closed.
+        const incompleteRemount = newUsers.length === 1
+          && !identity
+          && !state.turnIdentities.includes(binding.identity);
+        if (incompleteRemount) throw new ChatGptAssistantRebindPendingError();
+        throw new Error("ChatGPT opened another user turn while the bound assistant response was detached");
+      }
     }
     if (!identity || identity === binding.identity) return binding;
     return {
