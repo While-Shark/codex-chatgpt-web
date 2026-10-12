@@ -37,11 +37,18 @@ domTest("current and earlier approval surfaces select only the visible one-time 
 
 domTest("approval cannot choose another connector, a quoted alert, or ambiguous permission controls", async () => {
   await withPage(async page => {
-    for (const html of [card("GitHub"), card("Codex Native2 extra"), card("Codex Native2", "Allow once", 'class="answer-text"')]) {
+    for (const html of [card("GitHub"), card("Codex Native2 extra")]) {
       await page.setContent(html);
-      expect(await resolveChatGptToolConfirmation(page, "Codex Native2", true)).toBeFalse();
+      const abort = new AbortController();
+      const pending: boolean[] = [];
+      await expect(resolveChatGptToolConfirmation(page, "Codex Native2", true, abort.signal, 1_000,
+        undefined, async value => { pending.push(value); if (value) abort.abort(); }))
+        .rejects.toMatchObject({ name: "AbortError" });
+      expect(pending).toEqual([true, false]);
       expect(await page.locator("body").getAttribute("data-chosen")).toBeNull();
     }
+    await page.setContent(card("Codex Native2", "Allow once", 'class="answer-text"'));
+    expect(await resolveChatGptToolConfirmation(page, "Codex Native2", true)).toBeFalse();
     for (const html of [card() + card(), card().replace("</section>", "<button>Allow once</button></section>")]) {
       await page.setContent(html);
       let failure: unknown;
@@ -103,8 +110,13 @@ domTest("Chinese shortcut hint Deny is clicked after manual approval expires", a
 
 domTest("Chinese one-time approval does not select permanent or foreign connector actions", async () => {
   await withPage(async page => {
-    await page.setContent(chineseCard("GitHub"));
-    expect(await resolveChatGptToolConfirmation(page, "Codex Native2", true)).toBeFalse();
+    await page.setContent(chineseCard("NexusDock"));
+    const abort = new AbortController();
+    const pending: boolean[] = [];
+    await expect(resolveChatGptToolConfirmation(page, "Codex Native2", true, abort.signal, 1_000,
+      undefined, async value => { pending.push(value); if (value) abort.abort(); return value ? 75_000 : undefined; }))
+      .rejects.toMatchObject({ name: "AbortError" });
+    expect(pending).toEqual([true, false]);
     expect(await page.locator("body").getAttribute("data-chosen")).toBeNull();
     await page.setContent(chineseCard().replace("更多授权选项", "始终允许"));
     expect(await resolveChatGptToolConfirmation(page, "Codex Native2", true)).toBeTrue();
