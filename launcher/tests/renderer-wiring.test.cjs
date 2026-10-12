@@ -10,6 +10,18 @@ const electronMain = fs.readFileSync(path.join(launcherRoot, "electron", "main.c
 const browserHostSource = fs.readFileSync(path.join(launcherRoot, "electron", "browser-host.cjs"), "utf8");
 const preloadSource = fs.readFileSync(path.join(launcherRoot, "electron", "preload.cjs"), "utf8");
 
+test("approval sound and timeout controls keep sound separate from automatic authorization", () => {
+  assert.match(appSource, /setPreference\("approvalSoundEnabled", checked\)/);
+  assert.match(appSource, /setApprovalTimeoutSeconds\(Number\(event\.target\.value\)\)/);
+  assert.match(appSource, /\[30, 45, 60, 75\]\.map\(seconds/);
+  assert.match(preloadSource, /launcher:approval-timeout-seconds/);
+  assert.match(electronMain, /onApprovalNeeded: \(\) => announceToolApproval\(stateStore, logger\)/);
+  assert.match(electronMain, /shell\.beep\(\)/);
+  assert.match(electronMain, /approvalSoundEnabled/);
+  assert.match(electronMain, /validateApprovalTimeoutSeconds\(seconds\)/);
+  assert.match(electronMain, /silent: true/);
+});
+
 test("Bigger Context waits for startup and route recovery without invalidating healthy setup", async () => {
   const vm = require("node:vm");
   for (const fails of [false, true]) {

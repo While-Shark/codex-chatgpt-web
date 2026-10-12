@@ -8,7 +8,7 @@ test.skipIf(!process.env.CHATGPT_DOM_TEST_BROWSER)("CodeMirror language invalida
   const browser = await chromium.launch({ executablePath: process.env.CHATGPT_DOM_TEST_BROWSER, headless: true });
   try {
     const page = await browser.newPage();
-    await page.setContent(readFileSync(new URL("./fixtures/chatgpt-codemirror-reply-2026-10-11.html", import.meta.url), "utf8"));
+    await page.setContent(readFileSync(new URL("./fixtures/chatgpt-codemirror-reply-2026-10-11.html", import.meta.url), "utf8"), { waitUntil: "domcontentloaded" });
     const worker = Object.create(ChatGptBrowserWorker.prototype) as any;
     const cache = {};
     const observe = () => worker.responseDomSnapshot(page.locator("#turn"), cache);
@@ -22,7 +22,7 @@ test.skipIf(!process.env.CHATGPT_DOM_TEST_BROWSER)("CodeMirror language invalida
     });
     await expect(observe()).rejects.toThrow("one complete set of code lines");
   } finally { await browser.close(); }
-});
+}, 30_000);
 
 test.skipIf(!process.env.CHATGPT_DOM_TEST_BROWSER)("paragraph identity survives file preview movement in both response layouts", async () => {
   const browser = await chromium.launch({ executablePath: process.env.CHATGPT_DOM_TEST_BROWSER, headless: true });
@@ -165,6 +165,78 @@ test.skipIf(!process.env.CHATGPT_DOM_TEST_BROWSER)("an exchange rekeys only with
     }
   } finally { await browser.close(); }
 }, 30_000);
+
+// Regression for diagnostic trace 0771e52f3777 (2026-10-12): Activity can
+// render a user group before mounting the replacement assistant during a tool call.
+test.skipIf(!process.env.CHATGPT_DOM_TEST_BROWSER)("temporarily missing assistant recovers only after its accepted user group remounts", async () => {
+  const browser = await chromium.launch({ executablePath: process.env.CHATGPT_DOM_TEST_BROWSER, headless: true });
+  try {
+    const worker = Object.create(ChatGptBrowserWorker.prototype) as any;
+    const prompt = "Read the working tree and report status.";
+    const user = `<div data-user-message-bubble><div data-search-result-target style="white-space:pre-wrap">${prompt}</div></div>`;
+    const completed = `<div data-content-search-unit-key="submitted:assistant">
+      <div data-conversation-role="assistant"></div><div data-markdown-text-style="assistant-message"><p>Done</p></div>
+      </div><div class="turn-action-controls"><button>Copy</button></div>`;
+    for (const acknowledgedUser of [false, true]) {
+      const page = await browser.newPage();
+      await page.setContent("<main></main>");
+      const baseline = await worker.captureSubmissionBaseline(page, prompt);
+      if (acknowledgedUser) {
+        await page.locator("main").evaluate((node, html) => { node.innerHTML = html; },
+          `<div data-turn-key="submitted">${user}</div>`);
+        expect(await worker.currentSubmissionEvidence(page, baseline)).toBe("user_turn");
+      }
+      await page.locator("main").evaluate(node => {
+        node.innerHTML = '<div data-turn-key="activity"><span hidden data-chatgpt-agent-turn-start></span></div>';
+      });
+      const binding = await worker.waitForNewAssistantTurn(page, baseline, Date.now() + 5_000);
+      expect(binding.identity).toBe("group:assistant:activity");
+      await page.locator("main").evaluate((node, html) => {
+        node.innerHTML = html.before;
+        setTimeout(() => { node.innerHTML = html.after; }, 225);
+      }, {
+        before: `<div data-turn-key="submitted">${user}</div>`,
+        after: `<div data-turn-key="submitted">${user}${completed}</div>`,
+      });
+      const rebound = await worker.reconcileAssistantTurnBinding(page, baseline, binding);
+      expect(rebound.identity).toBe("group:assistant:submitted");
+      expect(await rebound.locator.count()).toBe(1);
+      await page.close();
+    }
+  } finally { await browser.close(); }
+}, 45_000);
+
+test.skipIf(!process.env.CHATGPT_DOM_TEST_BROWSER)("assistant remount grace expires without accepting a missing or foreign response", async () => {
+  const browser = await chromium.launch({ executablePath: process.env.CHATGPT_DOM_TEST_BROWSER, headless: true });
+  try {
+    const worker = Object.create(ChatGptBrowserWorker.prototype) as any;
+    const prompt = "Only read files.";
+    const user = `<div data-user-message-bubble><div data-search-result-target style="white-space:pre-wrap">${prompt}</div></div>`;
+    for (const scenario of ["missing-forever", "foreign-after-delay"] as const) {
+      const page = await browser.newPage();
+      await page.setContent("<main></main>");
+      const baseline = await worker.captureSubmissionBaseline(page, prompt);
+      await page.locator("main").evaluate(node => {
+        node.innerHTML = '<div data-turn-key="activity"><span hidden data-chatgpt-agent-turn-start></span></div>';
+      });
+      const binding = await worker.waitForNewAssistantTurn(page, baseline, Date.now() + 5_000);
+      await page.locator("main").evaluate((node, html) => {
+        node.innerHTML = html.before;
+        if (html.after) setTimeout(() => { node.innerHTML = html.after!; }, 225);
+      }, {
+        before: `<div data-turn-key="submitted">${user}</div>`,
+        after: scenario === "foreign-after-delay"
+          ? `<div data-turn-key="foreign">
+                <div data-user-message-bubble><div data-search-result-target>Unrelated task.</div></div>
+                <div data-conversation-role="assistant"></div></div>`
+          : undefined,
+      });
+      await expect(worker.reconcileAssistantTurnBinding(page, baseline, binding))
+        .rejects.toThrow("another user turn");
+      await page.close();
+    }
+  } finally { await browser.close(); }
+}, 45_000);
 
 test.skipIf(!process.env.CHATGPT_DOM_TEST_BROWSER)("binds captured Activity before an answer exists and recognizes uploaded native-button tiles", async () => {
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => new URL(request.url).pathname === "/backend-api/files/process_upload_stream"

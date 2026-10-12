@@ -70,6 +70,20 @@ test("launcher activity follows actual send callbacks and current-turn tool coun
   } finally { server.stop(true); }
 });
 
+test("launcher approval requests return a bounded configured timeout", async () => {
+  let timeoutMs = 75_000;
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    return Response.json({ ok: true, approvalTimeoutMs: timeoutMs });
+  } });
+  try {
+    const descriptor = descriptorFile(`http://127.0.0.1:${server.port}`);
+    const request = { phase: "approval" as const, traceId: "approval-lease", helperPid: process.pid, pending: true };
+    expect(await notifyLauncherTurn(descriptor, request)).toEqual({ approvalTimeoutMs: 75_000 });
+    timeoutMs = 300_000;
+    await expect(notifyLauncherTurn(descriptor, request)).rejects.toThrow("invalid approval timeout");
+  } finally { server.stop(true); }
+});
+
 test("a blocked sign-in replaces an opaque navigation abort with a non-retryable session error", async () => {
   let needsSignIn: unknown = true;
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {

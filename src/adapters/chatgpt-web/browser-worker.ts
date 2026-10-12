@@ -972,26 +972,33 @@ export async function resolveChatGptToolConfirmation(
   signal?: AbortSignal,
   timeoutMs = CHATGPT_TOOL_CONFIRMATION_TIMEOUT_MS,
   onVisible?: () => Promise<void>,
-  onApprovalPending?: (pending: boolean) => Promise<void>,
+  onApprovalPending?: (pending: boolean) => Promise<number | void>,
 ): Promise<boolean> {
+  // Any visible connector approval needs an alert and a manual decision.
+  // Auto-approve remains strictly limited to the *selected* Codex connector.
+  const escapedName = appName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const selectedTitle = new RegExp(
+    `^(?:Allow ChatGPT to use ${escapedName}\\?|允许 ChatGPT 使用 ${escapedName}\\s*(?:吗)?[？?]|允許 ChatGPT 使用 ${escapedName}\\s*(?:嗎)?[？?])$`,
+  );
+  const anyConnectorTitle = /^(?:Allow ChatGPT to use [^\n?？]{1,80}\?|允许 ChatGPT 使用 [^\n?？]{1,80}[？?]|允許 ChatGPT 使用 [^\n?？]{1,80}[？?])$/;
   const dialogs = page.locator('[role="dialog"], [data-testid="tool-approval-card"], [data-codex-approval-surface="true"]')
-    .filter({ has: page.getByText(`Allow ChatGPT to use ${appName}?`, { exact: true }) })
+    .filter({ has: page.getByText(anyConnectorTitle) })
     .filter({ visible: true });
   const dialogCount = await dialogs.count();
   if (dialogCount === 0) return false;
-  if (dialogCount !== 1) throw new Error("ChatGPT exposed multiple approvals for the selected connector");
+  if (dialogCount !== 1) throw new Error("ChatGPT exposed multiple connector approvals");
   const dialog = dialogs.first();
+  const isSelectedConnector = await dialog.getByText(selectedTitle).count() === 1;
   await onVisible?.();
   if (signal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
 
-  if (autoApprove) {
-    // ChatGPT exposes either "Allow once" or the shorter "Allow" for the
-    // current one-shot approval. Keep the matcher anchored so persistent
-    // actions such as "Always allow" cannot match.
+  if (autoApprove && isSelectedConnector) {
+    // One-shot labels may be localized and include an Enter/Return shortcut hint.
+    // Keep the matcher anchored and restrict hints so permanent approval is never selected.
     const allowCurrentAction = dialog
-      .getByRole("button", { name: /^Allow(?: once)?$/ })
+      .getByRole("button", { name: /^(?:Allow(?: once)?|允许一次|允許一次)(?:\s*(?:↵|↩|⏎|Enter))?$/ })
       .filter({ visible: true });
-    const deny = dialog.getByRole("button", { name: "Deny", exact: true }).filter({ visible: true });
+    const deny = dialog.getByRole("button", { name: /^(?:Deny|拒绝|拒絕)(?:\s*(?:Esc|Escape))?$/ }).filter({ visible: true });
     await allowCurrentAction.waitFor({ state: "visible", timeout: 10_000, signal });
     await deny.waitFor({ state: "visible", timeout: 10_000, signal });
     if (await allowCurrentAction.count() !== 1 || await deny.count() !== 1) {
@@ -1005,8 +1012,11 @@ export async function resolveChatGptToolConfirmation(
 
   let approvalError: unknown;
   try {
-    await onApprovalPending?.(true);
-    const deadline = Date.now() + timeoutMs;
+    const requestedTimeoutMs = await onApprovalPending?.(true);
+    // The launcher bounds this value so it cannot outlive a 90-second MCP invocation.
+    const manualTimeoutMs = [30_000, 45_000, 60_000, 75_000].includes(requestedTimeoutMs as number)
+      ? requestedTimeoutMs as number : timeoutMs;
+    const deadline = Date.now() + manualTimeoutMs;
     while (Date.now() < deadline) {
       if (signal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
       if (!await dialog.isVisible().catch(() => false)) return true;
@@ -1015,13 +1025,16 @@ export async function resolveChatGptToolConfirmation(
 
     if (signal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
     if (!await dialog.isVisible().catch(() => false)) return true;
-    const deny = dialog.getByRole("button", { name: "Deny", exact: true }).filter({ visible: true });
+    const deny = dialog.getByRole("button", { name: /^(?:Deny|拒绝|拒絕)(?:\s*(?:Esc|Escape))?$/ }).filter({ visible: true });
     if (await deny.count() !== 1) throw new Error("ChatGPT approval does not expose a unique Deny action");
     await deny.waitFor({ state: "visible", timeout: 5_000 });
     if (signal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
     await deny.click({ timeout: 5_000, signal });
     await dialog.waitFor({ state: "hidden", timeout: 10_000 });
-    return true;
+    throw new ChatGptWebAdapterError(
+      "ChatGPT connector approval timed out. The request was denied without granting permission; inspect the ChatGPT tab and retry the task.",
+      { status: 408, errorType: "invalid_request_error", code: "chatgpt_tool_approval_timeout", retryable: false },
+    );
   } catch (error) {
     approvalError = error;
     throw error;
@@ -1275,6 +1288,16 @@ export function remainingStageBudgetMs(
 
 export const CHATGPT_BROWSER_OBSERVATION_PROBE_TIMEOUT_MS = 5_000;
 export const MAX_CHATGPT_BROWSER_PAGE_REBINDS = 2;
+// A late user bubble can mount before its assistant node during ChatGPT Activity renders.
+// Only wait for identity evidence; never accept an unrelated turn or replay a tool call.
+export const CHATGPT_ASSISTANT_REBIND_GRACE_MS = 1_500;
+const CHATGPT_ASSISTANT_REBIND_RECHECK_MS = 175;
+
+class ChatGptAssistantRebindPendingError extends Error {
+  constructor() {
+    super("ChatGPT opened another user turn while the bound assistant response was detached");
+  }
+}
 
 export class ChatGptBrowserObservationTimeoutError extends Error {
   constructor(timeoutMs: number) {
@@ -3276,6 +3299,36 @@ export class ChatGptBrowserWorker {
     binding: ChatGptAssistantTurnBinding,
     signal?: AbortSignal,
   ): Promise<ChatGptAssistantTurnBinding> {
+    const deadline = Date.now() + CHATGPT_ASSISTANT_REBIND_GRACE_MS;
+    let rechecks = 0;
+    for (;;) {
+      try {
+        const rebound = await this.reconcileAssistantTurnBindingOnce(page, baseline, binding, signal);
+        if (rechecks > 0) {
+          console.warn(`[chatgpt-web] assistant binding recovered after ${rechecks} DOM rechecks`);
+        }
+        return rebound;
+      } catch (error) {
+        if (!(error instanceof ChatGptAssistantRebindPendingError)) throw error;
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) {
+          console.warn("[chatgpt-web] assistant binding still ambiguous after bounded DOM rechecks");
+          throw error;
+        }
+        rechecks += 1;
+        await withBrowserTurnAbort(new Promise<void>(resolve => {
+          setTimeout(resolve, Math.min(CHATGPT_ASSISTANT_REBIND_RECHECK_MS, remainingMs));
+        }), signal);
+      }
+    }
+  }
+
+  private async reconcileAssistantTurnBindingOnce(
+    page: Page,
+    baseline: ChatGptSubmissionBaseline,
+    binding: ChatGptAssistantTurnBinding,
+    signal?: AbortSignal,
+  ): Promise<ChatGptAssistantTurnBinding> {
     const boundCount = await withChatGptBrowserObservationTimeout(
       withBrowserTurnAbort(binding.locator.count(), signal),
     );
@@ -3323,7 +3376,16 @@ export class ChatGptBrowserWorker {
         // Activity can replace its temporary group while still generating; requiring
         // a completed answer here mistakes that same unfinished turn for a foreign one.
       }
-      if (!matches) throw new Error("ChatGPT opened another user turn while the bound assistant response was detached");
+      if (!matches) {
+        // An accepted user bubble can render before its corresponding assistant
+        // group. Reobserve briefly, but only while the old group is gone and
+        // there is exactly one new user. Foreign/competing turns still fail closed.
+        const incompleteRemount = newUsers.length === 1
+          && !identity
+          && !state.turnIdentities.includes(binding.identity);
+        if (incompleteRemount) throw new ChatGptAssistantRebindPendingError();
+        throw new Error("ChatGPT opened another user turn while the bound assistant response was detached");
+      }
     }
     if (!identity || identity === binding.identity) return binding;
     return {
@@ -5662,12 +5724,13 @@ export class ChatGptBrowserWorker {
           () => diagnostics.capture(page, "tool-confirmation-visible"),
           async pending => {
             if (!launcherSurfaceId) return;
-            await notifyLauncherTurn(this.config.browserHostDescriptorPath!, {
+            const response = await notifyLauncherTurn(this.config.browserHostDescriptorPath!, {
               phase: "approval",
               traceId: turn.traceId,
               helperPid: process.pid,
               pending,
             });
+            return pending ? response.approvalTimeoutMs : undefined;
           },
         )) {
           internalObservationFaults = 0;

@@ -3305,8 +3305,10 @@ test("unrelated ChatGPT alerts are not terminal", async () => {
 
 function toolConfirmationPage(options: {
   disappearAfterReads?: number;
+  connectorName?: string;
   surface?: "dialog" | "card" | "current";
-  allowLabel?: "Allow once" | "Allow" | "Always allow";
+  allowLabel?: "Allow once" | "Allow" | "Always allow" | "允许一次" | "允许一次 ↵" | "允許一次" | "始终允许";
+  denyLabel?: "Deny" | "拒绝" | "拒绝 Esc" | "拒絕";
 } = {}): {
   page: Page;
   pressed: string[];
@@ -3314,7 +3316,7 @@ function toolConfirmationPage(options: {
   let reads = 0;
   let visible = true;
   const pressed: string[] = [];
-  const availableButtons = [options.allowLabel ?? "Allow once", "Deny"] as const;
+  const availableButtons = [options.allowLabel ?? "Allow once", options.denyLabel ?? "Deny"] as const;
   const button = (name: string | RegExp) => {
     const actualName = availableButtons.find(candidate => (
       typeof name === "string" ? candidate === name : name.test(candidate)
@@ -3342,6 +3344,9 @@ function toolConfirmationPage(options: {
       return visible;
     },
     getByRole: (_role: string, input: { name: string | RegExp }) => button(input.name),
+    getByText: (pattern: RegExp) => ({
+      count: async () => pattern.test(`Allow ChatGPT to use ${options.connectorName ?? "Codex Native"}?`) ? 1 : 0,
+    }),
     waitFor: async ({ state }: { state: string }) => {
       expect(state).toBe("hidden");
       expect(visible).toBeFalse();
@@ -3359,9 +3364,12 @@ function toolConfirmationPage(options: {
   };
   return {
     page: {
-      getByText: (text: string, options: { exact: boolean }) => {
-        expect(text).toBe("Allow ChatGPT to use Codex Native?");
-        expect(options.exact).toBeTrue();
+      getByText: (text: RegExp) => {
+        expect(text).toBeInstanceOf(RegExp);
+        expect(text.test("Allow ChatGPT to use Codex Native?")).toBeTrue();
+        expect(text.test("允许 ChatGPT 使用 NexusDock?")).toBeTrue();
+        expect(text.test("允許 ChatGPT 使用 Codex Native2？")).toBeTrue();
+        expect(text.test("Allow ChatGPT to run an unknown command")).toBeFalse();
         return {};
       },
       locator: (selector: string) => selector.includes(surfaceSelector)
@@ -3384,8 +3392,9 @@ test("manual ChatGPT connector approval pauses and resumes the same browser turn
 test("an unanswered ChatGPT connector approval is denied instead of aborting the turn", async () => {
   const fixture = toolConfirmationPage();
   const pending: boolean[] = [];
-  expect(await resolveChatGptToolConfirmation(fixture.page, "Codex Native", false, undefined, 2,
-    undefined, async value => { pending.push(value); })).toBeTrue();
+  await expect(resolveChatGptToolConfirmation(fixture.page, "Codex Native", false, undefined, 2,
+    undefined, async value => { pending.push(value); }))
+    .rejects.toMatchObject({ code: "chatgpt_tool_approval_timeout", retryable: false });
   expect(pending).toEqual([true, false]);
   expect(fixture.pressed).toEqual(["Deny:click"]);
 });
@@ -3404,6 +3413,38 @@ test("connector auto-approval accepts the current shortened Allow action", async
 
   expect(await resolveChatGptToolConfirmation(fixture.page, "Codex Native", true)).toBeTrue();
   expect(fixture.pressed).toEqual(["Allow:click"]);
+});
+
+test("auto-approval recognizes Chinese one-time labels with optional Enter hint only when enabled", async () => {
+  for (const allowLabel of ["允许一次", "允许一次 ↵", "允許一次"] as const) {
+    const fixture = toolConfirmationPage({ allowLabel, denyLabel: "拒绝 Esc" });
+    expect(await resolveChatGptToolConfirmation(fixture.page, "Codex Native", true)).toBeTrue();
+    expect(fixture.pressed).toEqual([`${allowLabel}:click`]);
+  }
+});
+
+test("auto-approval never selects Chinese permanent grant controls", async () => {
+  const fixture = toolConfirmationPage({ allowLabel: "始终允许", denyLabel: "拒绝 Esc" });
+  await expect(resolveChatGptToolConfirmation(fixture.page, "Codex Native", true))
+    .rejects.toThrow("Approval button not found");
+  expect(fixture.pressed).toEqual([]);
+});
+
+test("an unrelated connector is announced for manual approval but is never auto-granted", async () => {
+  const fixture = toolConfirmationPage({ connectorName: "NexusDock", disappearAfterReads: 2 });
+  const pending: boolean[] = [];
+  expect(await resolveChatGptToolConfirmation(fixture.page, "Codex Native", true, undefined, 1_000,
+    undefined, async value => { pending.push(value); return value ? 45_000 : undefined; })).toBeTrue();
+  expect(pending).toEqual([true, false]);
+  expect(fixture.pressed).toEqual([]);
+});
+
+test("invalid per-request timeout from the launcher fails back to the bounded caller timeout", async () => {
+  const fixture = toolConfirmationPage({ connectorName: "NexusDock" });
+  await expect(resolveChatGptToolConfirmation(fixture.page, "Codex Native", true, undefined, 2,
+    undefined, async pending => pending ? 999_999 : undefined))
+    .rejects.toMatchObject({ code: "chatgpt_tool_approval_timeout" });
+  expect(fixture.pressed).toEqual(["Deny:click"]);
 });
 
 test("cancelling while an approval is pending clears the notice without choosing a button", async () => {

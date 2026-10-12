@@ -669,7 +669,7 @@ function LauncherShell({
             <Icon name="alert" />
             <div>
               <strong>{copy.toolApprovalNeeded} · {browserTabTitleFromTitle(tab.title, copy)}</strong>
-              <p>{copy.toolApprovalPendingBody}</p>
+              <p>{copy.toolApprovalPendingBody.replace("{seconds}", String(snapshot.state.approvalTimeoutSeconds))}</p>
             </div>
             <SecondaryButton onClick={() => {
               navigateSurface("browser");
@@ -1968,6 +1968,26 @@ function SettingsSurface({
             disabled={busy || snapshot.state.browserInteractionMode === "manual" || !snapshot.state.coreSetupComplete}
             onChange={(checked) => void setAutoApproveToolCalls(checked)}
           />
+        </SettingRow>
+        <SettingRow body={copy.approvalSoundBody} label={copy.approvalSound}>
+          <Switch
+            checked={snapshot.state.approvalSoundEnabled}
+            onChange={(checked) => void api!.setPreference("approvalSoundEnabled", checked)
+              .then(updateState)
+              .catch((cause) => setError(messageOf(cause)))}
+          />
+        </SettingRow>
+        <SettingRow body={copy.approvalTimeoutBody} label={copy.approvalTimeout}>
+          <select
+            aria-label={copy.approvalTimeout}
+            className="approval-timeout-select"
+            value={snapshot.state.approvalTimeoutSeconds}
+            onChange={(event) => void api!.setApprovalTimeoutSeconds(Number(event.target.value))
+              .then(updateState)
+              .catch((cause) => setError(messageOf(cause)))}
+          >
+            {[30, 45, 60, 75].map(seconds => <option key={seconds} value={seconds}>{seconds} s</option>)}
+          </select>
         </SettingRow>
         <SettingRow body={copy.savedChatsBody} label={copy.savedChats}>
           <Switch

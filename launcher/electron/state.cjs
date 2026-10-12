@@ -1,6 +1,15 @@
 const languages = require("./languages.json");
 const fs = require("node:fs");
 const { writePrivateFileAtomic } = require("./atomic-file.cjs");
+const APPROVAL_TIMEOUT_CHOICES = Object.freeze([30, 45, 60, 75]);
+
+function validateApprovalTimeoutSeconds(value) {
+  if (!APPROVAL_TIMEOUT_CHOICES.includes(value)) {
+    throw new Error("Approval timeout must be 30, 45, 60, or 75 seconds");
+  }
+  return value;
+}
+
 const SIDEBAR_MIN_WIDTH = 240;
 const SIDEBAR_MAX_WIDTH = 420;
 const SESSION_REFRESH_REMINDER_INTERVAL_MS = 48 * 60 * 60 * 1000;
@@ -15,6 +24,8 @@ const DEFAULT_STATE = Object.freeze({
   keepRunningOnClose: true,
   showBrowserDuringTurns: true,
   autoApproveToolCalls: false,
+  approvalSoundEnabled: true,
+  approvalTimeoutSeconds: 60,
   browserInteractionMode: "automatic",
   experimentalBiggerContext: false,
   composerPredictionsEnabled: true,
@@ -52,6 +63,7 @@ function readState(filePath) {
       "keepRunningOnClose",
       "showBrowserDuringTurns",
       "autoApproveToolCalls",
+      "approvalSoundEnabled",
       "experimentalBiggerContext",
       "composerPredictionsEnabled",
       "experimentalSkillAttachments",
@@ -62,6 +74,9 @@ function readState(filePath) {
       "sidebarOpen",
     ]) {
       if (typeof state[key] !== "boolean") state[key] = DEFAULT_STATE[key];
+    }
+    if (!APPROVAL_TIMEOUT_CHOICES.includes(state.approvalTimeoutSeconds)) {
+      state.approvalTimeoutSeconds = DEFAULT_STATE.approvalTimeoutSeconds;
     }
     if (state.browserInteractionMode !== "automatic" && state.browserInteractionMode !== "manual") {
       state.browserInteractionMode = DEFAULT_STATE.browserInteractionMode;
@@ -132,6 +147,8 @@ function createStateStore(filePath) {
 }
 
 module.exports = {
+  APPROVAL_TIMEOUT_CHOICES,
+  validateApprovalTimeoutSeconds,
   SESSION_REFRESH_REMINDER_INTERVAL_MS,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,

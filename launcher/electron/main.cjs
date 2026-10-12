@@ -14,6 +14,7 @@ const {
   Menu,
   nativeImage,
   nativeTheme,
+  Notification,
   screen,
   session,
   shell,
@@ -40,6 +41,7 @@ const { createUpdateController } = require("./update.cjs");
 const {
   createStateStore,
   nextSessionRefreshReminderAt,
+  validateApprovalTimeoutSeconds,
   validateSidebarState,
 } = require("./state.cjs");
 const {
@@ -315,6 +317,36 @@ const NATIVE_COPY = Object.freeze({
 
 function nativeCopyFor(language) {
   return NATIVE_COPY[language] || NATIVE_COPY.en;
+}
+
+const APPROVAL_NOTIFICATION_BODY = Object.freeze({
+  en: "A ChatGPT tool request needs your decision. Open the waiting chat.",
+  "zh-CN": "ChatGPT 工具请求等待人工授权，请打开对应聊天。",
+  "zh-TW": "ChatGPT 工具請求正在等待人工核准，請開啟對應對話。",
+  ja: "ChatGPT のツール要求が承認待ちです。チャットを開いてください。",
+  ko: "ChatGPT 도구 요청이 승인을 기다리고 있습니다. 해당 채팅을 여세요.",
+});
+
+function announceToolApproval(stateStore, logger) {
+  const preferences = stateStore.read();
+  if (preferences.approvalSoundEnabled) {
+    try { shell.beep(); }
+    catch (error) {
+      logger.warn("approval.sound_failed", { message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  try {
+    if (!Notification.isSupported() || mainWindow?.isFocused()) return;
+    const notification = new Notification({
+      title: LAUNCHER_PROFILE.displayName,
+      body: APPROVAL_NOTIFICATION_BODY[preferences.language] || APPROVAL_NOTIFICATION_BODY.en,
+      silent: true, // shell.beep() owns the sound, so a toast never causes double audio.
+    });
+    notification.on("click", () => showMainWindow());
+    notification.show();
+  } catch (error) {
+    logger.warn("approval.notification_failed", { message: error instanceof Error ? error.message : String(error) });
+  }
 }
 
 function updateTrayMenu(language) {
@@ -1029,8 +1061,12 @@ function registerIpc({ logger, stateStore }) {
     if (!IS_DEV_PROFILE && result.configured) startCatalogVerificationMonitor({ logger, stateStore });
     return { state, credentialsRequired: false, targetMode: mode };
   });
+  handle("launcher:approval-timeout-seconds", (_event, seconds) => (
+    stateStore.update({ approvalTimeoutSeconds: validateApprovalTimeoutSeconds(seconds) })
+  ));
   handle("launcher:set-preference", (_event, key, value) => {
-    const ordinary = key === "keepRunningOnClose" || key === "showBrowserDuringTurns";
+    const ordinary = key === "keepRunningOnClose" || key === "showBrowserDuringTurns"
+      || key === "approvalSoundEnabled";
     if (!ordinary) throw new Error("Unknown preference");
     return stateStore.update({ [key]: value === true });
   });
@@ -1191,6 +1227,7 @@ async function start() {
     logger,
     getBrowserHost: () => browserHost,
     getPreferences: () => syncBrowserPreferences(stateStore, runtimeHost.runtimeConfigSnapshot().config),
+    onApprovalNeeded: () => announceToolApproval(stateStore, logger),
     resolveProxy: url => session.fromPartition(LAUNCHER_PROFILE.browserPartition).resolveProxy(url),
     limits: limitsController,
   }).start();

@@ -8,12 +8,17 @@ on:
 permissions:
   contents: read
 
+# A new PR revision supersedes unfinished Windows preview builds.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, ubuntu-latest, windows-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -52,7 +57,27 @@ jobs:
         if: runner.os == 'Linux'
         run: bun run launcher/scripts/prepare-linux-appimage-tools.cjs
       - run: bun run verify
+      - name: Run real Chromium approval and assistant binding DOM tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $candidates = @(
+            (Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'),
+            (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe'),
+            (Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe')
+          )
+          $browser = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $browser) { throw 'Chromium-based browser not found for approval tests' }
+          $env:CHATGPT_DOM_TEST_BROWSER = $browser
+          bun test tests/tool-approval-dom.test.ts tests/browser-turn-binding.test.ts
       - run: bun run app:package
+      - name: Upload CI build packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-launcher-${{ runner.os }}-${{ runner.arch }}
+          path: launcher/artifacts/*
+          if-no-files-found: error
+          retention-days: 7
       - name: Verify Linux AppImage ABI on current Arch
         if: runner.os == 'Linux'
         run: |

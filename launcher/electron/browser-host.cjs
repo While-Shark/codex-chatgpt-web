@@ -1496,9 +1496,11 @@ class BrowserHost {
     this.heartbeatTurn(traceId, helperPid);
     const tab = [...this.turnTabs.values()].find(candidate => candidate.traceId === traceId);
     if (tab.interactionMode !== "automatic") throw new Error("Tool approval requires an automatic browser turn");
+    const newlyPending = pending && tab.approvalPending !== true;
     tab.approvalPending = pending;
     recordTurnActivity(tab);
     this.publishState?.(this.snapshot());
+    return newlyPending;
   }
 
   refreshTurnLeases(reason, now = Date.now()) {
