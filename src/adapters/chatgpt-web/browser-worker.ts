@@ -977,7 +977,7 @@ export async function resolveChatGptToolConfirmation(
   // Match the exact connector name inside a real approval surface, not a quoted chat message.
   const escapedName = appName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const approvalTitle = new RegExp(
-    `^(?:Allow ChatGPT to use ${escapedName}\\?|允许 ChatGPT 使用 ${escapedName}(?:吗)?[？?]|允許 ChatGPT 使用 ${escapedName}(?:嗎)?[？?])$`,
+    `^(?:Allow ChatGPT to use ${escapedName}\\?|允许 ChatGPT 使用 ${escapedName}\\s*(?:吗)?[？?]|允許 ChatGPT 使用 ${escapedName}\\s*(?:嗎)?[？?])$`,
   );
   const dialogs = page.locator('[role="dialog"], [data-testid="tool-approval-card"], [data-codex-approval-surface="true"]')
     .filter({ has: page.getByText(approvalTitle) })
