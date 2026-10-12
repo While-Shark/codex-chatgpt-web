@@ -990,13 +990,12 @@ export async function resolveChatGptToolConfirmation(
   if (signal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
 
   if (autoApprove) {
-    // ChatGPT exposes either "Allow once" or the shorter "Allow" for the
-    // current one-shot approval. Keep the matcher anchored so persistent
-    // actions such as "Always allow" cannot match.
+    // One-shot labels may be localized and include an Enter/Return shortcut hint.
+    // Keep the matcher anchored and restrict hints so permanent approval is never selected.
     const allowCurrentAction = dialog
-      .getByRole("button", { name: /^Allow(?: once)?$/ })
+      .getByRole("button", { name: /^(?:Allow(?: once)?|允许一次|允許一次)(?:\s*(?:↵|↩|⏎|Enter))?$/ })
       .filter({ visible: true });
-    const deny = dialog.getByRole("button", { name: /^(?:Deny|拒绝|拒絕)$/ }).filter({ visible: true });
+    const deny = dialog.getByRole("button", { name: /^(?:Deny|拒绝|拒絕)(?:\s*(?:Esc|Escape))?$/ }).filter({ visible: true });
     await allowCurrentAction.waitFor({ state: "visible", timeout: 10_000, signal });
     await deny.waitFor({ state: "visible", timeout: 10_000, signal });
     if (await allowCurrentAction.count() !== 1 || await deny.count() !== 1) {
@@ -1020,7 +1019,7 @@ export async function resolveChatGptToolConfirmation(
 
     if (signal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
     if (!await dialog.isVisible().catch(() => false)) return true;
-    const deny = dialog.getByRole("button", { name: /^(?:Deny|拒绝|拒絕)$/ }).filter({ visible: true });
+    const deny = dialog.getByRole("button", { name: /^(?:Deny|拒绝|拒絕)(?:\s*(?:Esc|Escape))?$/ }).filter({ visible: true });
     if (await deny.count() !== 1) throw new Error("ChatGPT approval does not expose a unique Deny action");
     await deny.waitFor({ state: "visible", timeout: 5_000 });
     if (signal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
