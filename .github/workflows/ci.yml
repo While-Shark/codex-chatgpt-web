@@ -66,6 +66,13 @@ jobs:
           $env:CHATGPT_DOM_TEST_BROWSER = $browser
           bun test tests/tool-approval-dom.test.ts
       - run: bun run app:package
+      - name: Upload CI build packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-launcher-${{ runner.os }}-${{ runner.arch }}
+          path: launcher/artifacts/*
+          if-no-files-found: error
+          retention-days: 7
       - name: Verify Linux AppImage ABI on current Arch
         if: runner.os == 'Linux'
         run: |
