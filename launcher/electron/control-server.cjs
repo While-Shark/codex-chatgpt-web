@@ -38,10 +38,11 @@ function writeJson(response, status, body) {
 }
 
 class BrowserControlServer {
-  constructor({ logger, getBrowserHost, getPreferences, resolveProxy, limits }) {
+  constructor({ logger, getBrowserHost, getPreferences, resolveProxy, limits, onApprovalNeeded = () => {} }) {
     this.logger = logger;
     this.getBrowserHost = getBrowserHost;
     this.getPreferences = getPreferences;
+    this.onApprovalNeeded = onApprovalNeeded;
     this.resolveProxy = resolveProxy;
     this.limits = limits;
     this.token = randomBytes(32).toString("base64url");
@@ -296,9 +297,21 @@ class BrowserControlServer {
       }
       if (request.url === "/v1/turn/approval") {
         if (host.browserInteractionMode() === "manual") throw new Error("Automatic browser interaction is disabled");
-        host.setTurnApprovalPending(body.traceId, body.helperPid, body.pending);
+        const newlyPending = host.setTurnApprovalPending(body.traceId, body.helperPid, body.pending);
+        if (newlyPending) {
+          try { this.onApprovalNeeded(); }
+          catch (error) {
+            // Sound and desktop notifications are best-effort, never approval authority.
+            this.logger.warn("browser.tool_approval_notification_failed", {
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
         this.logger.info("browser.tool_approval", { traceId: body.traceId, pending: body.pending });
-        writeJson(response, 200, { ok: true });
+        // Keep this callback bounded by the MCP 90-second request deadline.
+        const seconds = [30, 45, 60, 75].includes(preferences.approvalTimeoutSeconds)
+          ? preferences.approvalTimeoutSeconds : 60;
+        writeJson(response, 200, { ok: true, ...(body.pending === true ? { approvalTimeoutMs: seconds * 1_000 } : {}) });
         return;
       }
       if (request.url === "/v1/turn/usage") {
