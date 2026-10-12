@@ -3306,7 +3306,8 @@ test("unrelated ChatGPT alerts are not terminal", async () => {
 function toolConfirmationPage(options: {
   disappearAfterReads?: number;
   surface?: "dialog" | "card" | "current";
-  allowLabel?: "Allow once" | "Allow" | "Always allow";
+  allowLabel?: "Allow once" | "Allow" | "Always allow" | "允许一次" | "允许一次 ↵" | "允許一次" | "始终允许";
+  denyLabel?: "Deny" | "拒绝" | "拒绝 Esc" | "拒絕";
 } = {}): {
   page: Page;
   pressed: string[];
@@ -3314,7 +3315,7 @@ function toolConfirmationPage(options: {
   let reads = 0;
   let visible = true;
   const pressed: string[] = [];
-  const availableButtons = [options.allowLabel ?? "Allow once", "Deny"] as const;
+  const availableButtons = [options.allowLabel ?? "Allow once", options.denyLabel ?? "Deny"] as const;
   const button = (name: string | RegExp) => {
     const actualName = availableButtons.find(candidate => (
       typeof name === "string" ? candidate === name : name.test(candidate)
@@ -3410,6 +3411,21 @@ test("connector auto-approval accepts the current shortened Allow action", async
 
   expect(await resolveChatGptToolConfirmation(fixture.page, "Codex Native", true)).toBeTrue();
   expect(fixture.pressed).toEqual(["Allow:click"]);
+});
+
+test("auto-approval recognizes Chinese one-time labels with optional Enter hint only when enabled", async () => {
+  for (const allowLabel of ["允许一次", "允许一次 ↵", "允許一次"] as const) {
+    const fixture = toolConfirmationPage({ allowLabel, denyLabel: "拒绝 Esc" });
+    expect(await resolveChatGptToolConfirmation(fixture.page, "Codex Native", true)).toBeTrue();
+    expect(fixture.pressed).toEqual([`${allowLabel}:click`]);
+  }
+});
+
+test("auto-approval never selects Chinese permanent grant controls", async () => {
+  const fixture = toolConfirmationPage({ allowLabel: "始终允许", denyLabel: "拒绝 Esc" });
+  await expect(resolveChatGptToolConfirmation(fixture.page, "Codex Native", true))
+    .rejects.toThrow("Approval button not found");
+  expect(fixture.pressed).toEqual([]);
 });
 
 test("cancelling while an approval is pending clears the notice without choosing a button", async () => {
