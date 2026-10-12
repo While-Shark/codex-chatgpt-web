@@ -653,6 +653,7 @@ export async function notifyLauncherTurn(
   cancelledByUser?: boolean;
   authenticationRequired?: boolean;
   trackUsage?: boolean;
+  approvalTimeoutMs?: number;
 }> {
   const descriptor = readLauncherBrowserHostDescriptor(descriptorPath);
   const controller = new AbortController();
@@ -699,6 +700,13 @@ export async function notifyLauncherTurn(
         connectorBound: body.connectorBound,
         trackUsage: body.trackUsage === true,
       };
+    }
+    if (activity.phase === "approval" && activity.pending === true
+      && body.approvalTimeoutMs !== undefined) {
+      if (![30_000, 45_000, 60_000, 75_000].includes(body.approvalTimeoutMs as number)) {
+        throw new Error("Launcher returned an invalid approval timeout");
+      }
+      return { approvalTimeoutMs: body.approvalTimeoutMs as number };
     }
     if (activity.phase === "end") {
       if (typeof body.cancelledByUser !== "boolean") {
