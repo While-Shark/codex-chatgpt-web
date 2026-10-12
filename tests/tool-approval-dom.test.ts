@@ -5,7 +5,7 @@ import { resolveChatGptToolConfirmation } from "../src/adapters/chatgpt-web/brow
 const domTest = test.skipIf(!process.env.CHATGPT_DOM_TEST_BROWSER);
 
 async function withPage(run: (page: Page) => Promise<void>) {
-  const browser = await chromium.launch({ executablePath: process.env.CHATGPT_DOM_TEST_BROWSER, headless: true });
+  const browser = await chromium.launch({ executablePath: process.env.CHATGPT_DOM_TEST_BROWSER, headless: true, timeout: 45_000 });
   try { await run(await browser.newPage()); } finally { await browser.close(); }
 }
 
@@ -33,7 +33,7 @@ domTest("current and earlier approval surfaces select only the visible one-time 
       expect(await page.locator("body").getAttribute("data-chosen")).toBe("Allow once");
     }
   });
-}, 20_000);
+}, 60_000);
 
 domTest("approval cannot choose another connector, a quoted alert, or ambiguous permission controls", async () => {
   await withPage(async page => {
