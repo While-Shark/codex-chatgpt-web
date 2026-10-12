@@ -60,6 +60,34 @@ domTest("a pending current approval stays manual and respects cancellation", asy
   });
 }, 20_000);
 
+domTest("localized approval stays manual and accepts a human decision", async () => {
+  await withPage(async page => {
+    await page.setContent(card().replace("Allow ChatGPT to use Codex Native2?", "允许 ChatGPT 使用 Codex Native2 吗？")
+      .replace(">Deny</button>", ">拒绝</button>"));
+    await page.evaluate(() => {
+      setTimeout(() => {
+        const button = [...document.querySelectorAll("button")].find(el => el.textContent === "拒绝");
+        button?.click();
+      }, 50);
+    });
+    const pending: boolean[] = [];
+    expect(await resolveChatGptToolConfirmation(page, "Codex Native2", false, undefined, 1_000,
+      undefined, async value => { pending.push(value); })).toBeTrue();
+    expect(pending).toEqual([true, false]);
+    expect(await page.locator("body").getAttribute("data-chosen")).toBeNull();
+  });
+}, 20_000);
+
+domTest("localized unapproved request times out and is explicitly denied", async () => {
+  await withPage(async page => {
+    await page.setContent(card().replace("Allow ChatGPT to use Codex Native2?", "允许 ChatGPT 使用 Codex Native2 吗？")
+      .replace(">Deny</button>", ">拒绝</button>"));
+    await expect(resolveChatGptToolConfirmation(page, "Codex Native2", false, undefined, 30))
+      .rejects.toMatchObject({ code: "chatgpt_tool_approval_timeout" });
+    expect(await page.locator("section").count()).toBe(0);
+    expect(await page.locator("body").getAttribute("data-chosen")).toBeNull();
+  });
+}, 20_000);
 domTest("an approval waits for its actions to finish mounting", async () => {
   await withPage(async page => {
     await page.setContent(card());
