@@ -3363,7 +3363,10 @@ function toolConfirmationPage(options: {
         expect(text).toBeInstanceOf(RegExp);
         expect(text.test("Allow ChatGPT to use Codex Native?")).toBeTrue();
         expect(text.test("允许 ChatGPT 使用 Codex Native 吗？")).toBeTrue();
+        expect(text.test("允许 ChatGPT 使用 Codex Native吗？")).toBeTrue();
+        expect(text.test("允許 ChatGPT 使用 Codex Native 嗎？")).toBeTrue();
         expect(text.test("Allow ChatGPT to use Codex Native2?")).toBeFalse();
+        expect(text.test("允许 ChatGPT 使用 Codex Native2 吗？")).toBeFalse();
         return {};
       },
       locator: (selector: string) => selector.includes(surfaceSelector)
