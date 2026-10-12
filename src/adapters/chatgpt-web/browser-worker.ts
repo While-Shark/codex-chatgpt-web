@@ -972,24 +972,27 @@ export async function resolveChatGptToolConfirmation(
   signal?: AbortSignal,
   timeoutMs = CHATGPT_TOOL_CONFIRMATION_TIMEOUT_MS,
   onVisible?: () => Promise<void>,
-  onApprovalPending?: (pending: boolean) => Promise<void>,
+  onApprovalPending?: (pending: boolean) => Promise<number | void>,
 ): Promise<boolean> {
-  // Match the exact connector name inside a real approval surface, not a quoted chat message.
+  // Any visible connector approval needs an alert and a manual decision.
+  // Auto-approve remains strictly limited to the *selected* Codex connector.
   const escapedName = appName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const approvalTitle = new RegExp(
+  const selectedTitle = new RegExp(
     `^(?:Allow ChatGPT to use ${escapedName}\\?|允许 ChatGPT 使用 ${escapedName}\\s*(?:吗)?[？?]|允許 ChatGPT 使用 ${escapedName}\\s*(?:嗎)?[？?])$`,
   );
+  const anyConnectorTitle = /^(?:Allow ChatGPT to use [^\\n?？]{1,80}\\?|允许 ChatGPT 使用 [^\\n?？]{1,80}[？?]|允許 ChatGPT 使用 [^\\n?？]{1,80}[？?])$/;
   const dialogs = page.locator('[role="dialog"], [data-testid="tool-approval-card"], [data-codex-approval-surface="true"]')
-    .filter({ has: page.getByText(approvalTitle) })
+    .filter({ has: page.getByText(anyConnectorTitle) })
     .filter({ visible: true });
   const dialogCount = await dialogs.count();
   if (dialogCount === 0) return false;
-  if (dialogCount !== 1) throw new Error("ChatGPT exposed multiple approvals for the selected connector");
+  if (dialogCount !== 1) throw new Error("ChatGPT exposed multiple connector approvals");
   const dialog = dialogs.first();
+  const isSelectedConnector = await dialog.getByText(selectedTitle).count() === 1;
   await onVisible?.();
   if (signal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
 
-  if (autoApprove) {
+  if (autoApprove && isSelectedConnector) {
     // One-shot labels may be localized and include an Enter/Return shortcut hint.
     // Keep the matcher anchored and restrict hints so permanent approval is never selected.
     const allowCurrentAction = dialog
@@ -1009,8 +1012,11 @@ export async function resolveChatGptToolConfirmation(
 
   let approvalError: unknown;
   try {
-    await onApprovalPending?.(true);
-    const deadline = Date.now() + timeoutMs;
+    const requestedTimeoutMs = await onApprovalPending?.(true);
+    // The launcher bounds this value so it cannot outlive a 90-second MCP invocation.
+    const manualTimeoutMs = [30_000, 45_000, 60_000, 75_000].includes(requestedTimeoutMs as number)
+      ? requestedTimeoutMs as number : timeoutMs;
+    const deadline = Date.now() + manualTimeoutMs;
     while (Date.now() < deadline) {
       if (signal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
       if (!await dialog.isVisible().catch(() => false)) return true;
@@ -5669,12 +5675,13 @@ export class ChatGptBrowserWorker {
           () => diagnostics.capture(page, "tool-confirmation-visible"),
           async pending => {
             if (!launcherSurfaceId) return;
-            await notifyLauncherTurn(this.config.browserHostDescriptorPath!, {
+            const response = await notifyLauncherTurn(this.config.browserHostDescriptorPath!, {
               phase: "approval",
               traceId: turn.traceId,
               helperPid: process.pid,
               pending,
             });
+            return pending ? response.approvalTimeoutMs : undefined;
           },
         )) {
           internalObservationFaults = 0;
