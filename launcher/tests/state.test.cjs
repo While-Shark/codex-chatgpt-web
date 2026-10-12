@@ -8,6 +8,7 @@ const {
   createStateStore,
   nextSessionRefreshReminderAt,
   validateSidebarState,
+  validateApprovalTimeoutSeconds,
 } = require("../electron/state.cjs");
 
 test("prediction setting starts on and remains off after reopening the state store", () => {
@@ -18,6 +19,26 @@ test("prediction setting starts on and remains off after reopening the state sto
     assert.equal(store.read().composerPredictionsEnabled, true);
     store.update({ composerPredictionsEnabled: false });
     assert.equal(createStateStore(file).read().composerPredictionsEnabled, false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("approval sound and timeout preferences persist and invalid values revert safely", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-approval-preferences-"));
+  const file = path.join(root, "state.json");
+  try {
+    const store = createStateStore(file);
+    assert.equal(store.read().approvalSoundEnabled, true);
+    assert.equal(store.read().approvalTimeoutSeconds, 60);
+    store.update({ approvalSoundEnabled: false, approvalTimeoutSeconds: 75 });
+    assert.equal(createStateStore(file).read().approvalSoundEnabled, false);
+    assert.equal(createStateStore(file).read().approvalTimeoutSeconds, 75);
+    fs.writeFileSync(file, JSON.stringify({ version: 1, approvalSoundEnabled: "yes", approvalTimeoutSeconds: 300 }));
+    assert.equal(createStateStore(file).read().approvalSoundEnabled, true);
+    assert.equal(createStateStore(file).read().approvalTimeoutSeconds, 60);
+    for (const value of [10, 90, 300, 61, "60", null, 0, Infinity]) {
+      assert.throws(() => validateApprovalTimeoutSeconds(value), /Approval timeout/);
+    }
+    for (const value of [30, 45, 60, 75]) assert.equal(validateApprovalTimeoutSeconds(value), value);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -36,6 +57,8 @@ test("launcher state persists onboarding, language, and autostart atomically", (
       keepRunningOnClose: true,
       showBrowserDuringTurns: true,
       autoApproveToolCalls: false,
+      approvalSoundEnabled: true,
+      approvalTimeoutSeconds: 60,
       browserInteractionMode: "automatic",
       experimentalBiggerContext: false,
       composerPredictionsEnabled: true,
@@ -67,6 +90,8 @@ test("launcher state persists onboarding, language, and autostart atomically", (
       keepRunningOnClose: false,
       showBrowserDuringTurns: true,
       autoApproveToolCalls: false,
+      approvalSoundEnabled: true,
+      approvalTimeoutSeconds: 60,
       browserInteractionMode: "automatic",
       experimentalBiggerContext: false,
       composerPredictionsEnabled: true,
@@ -149,6 +174,8 @@ test("persisted sidebar corruption is repaired without changing the rest of laun
       keepRunningOnClose: true,
       showBrowserDuringTurns: true,
       autoApproveToolCalls: false,
+      approvalSoundEnabled: true,
+      approvalTimeoutSeconds: 60,
       browserInteractionMode: "automatic",
       experimentalBiggerContext: false,
       composerPredictionsEnabled: true,
