@@ -3359,9 +3359,11 @@ function toolConfirmationPage(options: {
   };
   return {
     page: {
-      getByText: (text: string, options: { exact: boolean }) => {
-        expect(text).toBe("Allow ChatGPT to use Codex Native?");
-        expect(options.exact).toBeTrue();
+      getByText: (text: RegExp) => {
+        expect(text).toBeInstanceOf(RegExp);
+        expect(text.test("Allow ChatGPT to use Codex Native?")).toBeTrue();
+        expect(text.test("允许 ChatGPT 使用 Codex Native 吗？")).toBeTrue();
+        expect(text.test("Allow ChatGPT to use Codex Native2?")).toBeFalse();
         return {};
       },
       locator: (selector: string) => selector.includes(surfaceSelector)
@@ -3384,8 +3386,9 @@ test("manual ChatGPT connector approval pauses and resumes the same browser turn
 test("an unanswered ChatGPT connector approval is denied instead of aborting the turn", async () => {
   const fixture = toolConfirmationPage();
   const pending: boolean[] = [];
-  expect(await resolveChatGptToolConfirmation(fixture.page, "Codex Native", false, undefined, 2,
-    undefined, async value => { pending.push(value); })).toBeTrue();
+  await expect(resolveChatGptToolConfirmation(fixture.page, "Codex Native", false, undefined, 2,
+    undefined, async value => { pending.push(value); }))
+    .rejects.toMatchObject({ code: "chatgpt_tool_approval_timeout", retryable: false });
   expect(pending).toEqual([true, false]);
   expect(fixture.pressed).toEqual(["Deny:click"]);
 });
